@@ -126,7 +126,6 @@ background:#1f2430;color:#fff;padding:12px 18px;border-radius:12px;font-size:14p
 <script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, collection, doc, onSnapshot, setDoc, deleteDoc }
   from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
@@ -155,36 +154,46 @@ function toast(msg,bad){const t=$("#toast");t.textContent=msg;t.className="toast
 function countTasks(n){return n===0?"لا توجد مهام":n===1?"مهمة واحدة":n===2?"مهمتان":n<=10?n+" مهام":n+" مهمة";}
 const safeName=n=>(n||"").replace(/[<>:"/\\|?*\x00-\x1f]/g,"").trim().replace(/\.+$/,"")||"عميل بدون اسم";
 
-let auth,db,user=null,clients=[],cur=null,saveT=null,unsub=null,dirName="";
+let db,user=null,clients=[],cur=null,saveT=null,unsub=null,dirName="";
 
-/* ---------------- start ---------------- */
+/* ---------------- start (no login — private link key) ---------------- */
+const KEY_RE=/^[A-Za-z0-9]{24,64}$/;
+function getKey(){
+  const url=new URL(location.href);let k=url.searchParams.get("k");
+  if(!k||!KEY_RE.test(k)){try{k=localStorage.getItem("raffed-key");}catch{}}
+  if(!k||!KEY_RE.test(k)){
+    const A="abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",b=new Uint8Array(28);
+    crypto.getRandomValues(b);k=[...b].map(x=>A[x%62]).join("");
+  }
+  try{localStorage.setItem("raffed-key",k);}catch{}
+  if(url.searchParams.get("k")!==k){url.searchParams.set("k",k);history.replaceState(null,"",url.toString());}
+  return k;
+}
+const shareLink=()=>{const u=new URL(location.href);u.hash="";return u.toString();};
 if(String(firebaseConfig.apiKey).startsWith("PASTE")){
   $("#app").innerHTML=`<div class="login"><div class="sheet"><div class="logo">⚙️</div><h2>باقي خطوة</h2>
-  <p style="line-height:1.8;color:#555">لازم تلصق إعدادات مشروع Firebase داخل ملف <b>index.html</b> مكان كلمة PASTE. راجع ملف «دليل الإعداد».</p></div></div>`;
+  <p style="line-height:1.8;color:#555">لازم تلصق إعدادات مشروع Firebase داخل ملف <b>index.html</b>.</p></div></div>`;
 }else{
   const app=initializeApp(firebaseConfig);
-  auth=getAuth(app);
   db=initializeFirestore(app,{localCache:persistentLocalCache({tabManager:persistentMultipleTabManager()})});
-  onAuthStateChanged(auth,u=>{
-    user=u;if(unsub){unsub();unsub=null;}clients=[];cur=null;
-    renderTop();
-    if(!u){renderLogin();return;}
-    $("#app").innerHTML=`<div class="loading">جاري التحميل...</div>`;
-    let first=true;
-    unsub=onSnapshot(collection(db,"users",u.uid,"clients"),snap=>{
-      let list=snap.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>(b.created||0)-(a.created||0));
-      if(cur){
-        const fresh=list.find(c=>c.id===cur.id);
-        if(!fresh){clients=list;cur=null;location.hash="#/";return;}
-        cur.folderCreated=fresh.folderCreated;cur.folderPath=fresh.folderPath;cur.inExcel=fresh.inExcel;
-        clients=list.map(c=>c.id===cur.id?cur:c);renderStatus();
-      }else{clients=list;route();}
-      first=false;
-    },err=>toast("تعذر تحميل البيانات: "+err.message,true));
+  user={uid:getKey()};
+  renderTop();
+  unsub=onSnapshot(clientsCol(),snap=>{
+    let list=snap.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>(b.created||0)-(a.created||0));
+    if(cur){
+      const fresh=list.find(c=>c.id===cur.id);
+      if(!fresh){clients=list;cur=null;location.hash="#/";return;}
+      cur.folderCreated=fresh.folderCreated;cur.folderPath=fresh.folderPath;cur.inExcel=fresh.inExcel;
+      clients=list.map(c=>c.id===cur.id?cur:c);renderStatus();
+    }else{clients=list;route();}
+  },err=>{
+    $("#app").innerHTML=`<div class="login"><div class="sheet"><div class="logo">⚠️</div><h2>تعذر الاتصال بقاعدة البيانات</h2>
+    <p style="line-height:1.8;color:#555">تأكد إن Firestore Database منشأة في Firebase وإن القواعد (Rules) ملصوقة ومنشورة.</p>
+    <p style="color:#999;font-size:12px;direction:ltr">${esc(err.code||err.message)}</p></div></div>`;
   });
 }
-const clientsCol=()=>collection(db,"users",user.uid,"clients");
-const clientDoc=id=>doc(db,"users",user.uid,"clients",id);
+const clientsCol=()=>collection(db,"spaces",user.uid,"clients");
+const clientDoc=id=>doc(db,"spaces",user.uid,"clients",id);
 
 /* ---------------- top bar ---------------- */
 async function renderTop(){
@@ -192,25 +201,14 @@ async function renderTop(){
   if(!user){el.innerHTML="";return;}
   if(canFS){try{const h=await idbGet("dir");dirName=h?h.name:"";}catch{}}
   el.innerHTML=`${canFS?`<button class="chip" id="dirChip" title="المكان اللي تنشأ فيه مجلدات العملاء وملف الإكسل">📁 ${dirName?esc(dirName):"اختر مكان الحفظ"}</button>`:""}
-    <button class="chip" id="logout">خروج</button>`;
-  $("#logout").onclick=()=>{if(confirm("تسجيل الخروج؟"))signOut(auth);};
-  if(canFS)$("#dirChip").onclick=async()=>{try{await pickDir();toast("تم اختيار مكان الحفظ: "+dirName);}catch(e){if(e.name!=="AbortError")toast(e.message,true);}};
-}
-
-/* ---------------- login ---------------- */
-function renderLogin(){
-  $("#app").innerHTML=`<div class="login"><div class="sheet">
-    <div class="logo">📐</div><h2>ملفات العملاء</h2>
-    <input class="fld" id="em" type="email" placeholder="البريد الإلكتروني" autocomplete="username" dir="ltr">
-    <input class="fld" id="pw" type="password" placeholder="كلمة المرور" autocomplete="current-password" dir="ltr">
-    <button class="btn blue" id="go">دخول</button><div class="err" id="err"></div></div></div>`;
-  const go=async()=>{
-    const b=$("#go");b.disabled=true;$("#err").textContent="";
-    try{await signInWithEmailAndPassword(auth,$("#em").value.trim(),$("#pw").value);}
-    catch(e){$("#err").textContent=/invalid|wrong|not-found|credential/.test(e.code||"")?"البريد أو كلمة المرور غير صحيحة":
-      e.code==="auth/too-many-requests"?"محاولات كثيرة — انتظر قليلًا":"تعذر الدخول: "+(e.code||e.message);b.disabled=false;}
+    <button class="chip" id="linkChip" title="افتح نفس البيانات على جهاز ثاني">🔗 جهاز آخر</button>`;
+  $("#linkChip").onclick=async()=>{
+    const url=shareLink();
+    if(navigator.share){try{await navigator.share({title:"ملفات العملاء",url});return;}catch(e){if(e.name==="AbortError")return;}}
+    try{await navigator.clipboard.writeText(url);toast("تم نسخ الرابط — افتحه على الجهاز الثاني (لا ترسله لأحد)");}
+    catch{prompt("انسخ هذا الرابط وافتحه على الجهاز الثاني:",url);}
   };
-  $("#go").onclick=go;$("#pw").onkeydown=e=>{if(e.key==="Enter")go();};
+  if(canFS)$("#dirChip").onclick=async()=>{try{await pickDir();toast("تم اختيار مكان الحفظ: "+dirName);}catch(e){if(e.name!=="AbortError")toast(e.message,true);}};
 }
 
 /* ---------------- page 1 : files ---------------- */
