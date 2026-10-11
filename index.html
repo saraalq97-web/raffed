@@ -126,8 +126,7 @@ background:#1f2430;color:#fff;padding:12px 18px;border-radius:12px;font-size:14p
 <script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, collection, doc, onSnapshot, setDoc, deleteDoc }
-  from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+import { getFirestore, collection, doc, getDocs, setDoc, deleteDoc } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-lite.js";
 
 /* ============ إعدادات Firebase — الصق هنا إعدادات مشروعك ============ */
 const firebaseConfig = {
@@ -175,27 +174,33 @@ if(String(firebaseConfig.apiKey).startsWith("PASTE")){
   <p style="line-height:1.8;color:#555">لازم تلصق إعدادات مشروع Firebase داخل ملف <b>index.html</b>.</p></div></div>`;
 }else{
   const app=initializeApp(firebaseConfig);
-  db=initializeFirestore(app,{experimentalAutoDetectLongPolling:true,localCache:persistentLocalCache({tabManager:persistentMultipleTabManager()})});
+  db=getFirestore(app);
   user={uid:getKey()};
   renderTop();
-  let got=false;
-  setTimeout(()=>{if(!got)$("#app").innerHTML=`<div class="login"><div class="sheet"><div class="logo">⏳</div><h2>ما وصلنا لقاعدة البيانات</h2>
-    <p style="line-height:1.8;color:#555">تأكد إنك أنشأت <b>Firestore Database</b> في Firebase (Databases &amp; Storage ← Firestore ← Create database)، وإن القواعد منشورة، وإن الإنترنت شغّال. بعدها حدّث الصفحة.</p></div></div>`;},12000);
-  unsub=onSnapshot(clientsCol(),{includeMetadataChanges:true},snap=>{
-    if(snap.metadata&&snap.metadata.fromCache&&!got&&snap.empty)return;
-    got=true;
-    let list=snap.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>(b.created||0)-(a.created||0));
+  setTimeout(()=>load(true),0);
+  document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible")load(false);});
+}
+var loading=false;
+async function load(first){
+  if(loading)return;loading=true;
+  let done=false;
+  const t=first?setTimeout(()=>{if(!done)showDbError("timeout");},15000):null;
+  try{
+    const snap=await getDocs(clientsCol());done=true;clearTimeout(t);
+    const list=snap.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>(b.created||0)-(a.created||0));
     if(cur){
       const fresh=list.find(c=>c.id===cur.id);
       if(!fresh){clients=list;cur=null;location.hash="#/";return;}
       cur.folderCreated=fresh.folderCreated;cur.folderPath=fresh.folderPath;cur.inExcel=fresh.inExcel;
       clients=list.map(c=>c.id===cur.id?cur:c);renderStatus();
     }else{clients=list;route();}
-  },err=>{
-    $("#app").innerHTML=`<div class="login"><div class="sheet"><div class="logo">⚠️</div><h2>تعذر الاتصال بقاعدة البيانات</h2>
-    <p style="line-height:1.8;color:#555">تأكد إن Firestore Database منشأة في Firebase وإن القواعد (Rules) ملصوقة ومنشورة.</p>
-    <p style="color:#999;font-size:12px;direction:ltr">${esc(err.code||err.message)}</p></div></div>`;
-  });
+  }catch(err){done=true;clearTimeout(t);if(first)showDbError(err.code||err.message);else toast("تعذر التحديث: "+(err.code||err.message),true);}
+  finally{loading=false;}
+}
+function showDbError(code){
+  $("#app").innerHTML=`<div class="login"><div class="sheet"><div class="logo">⚠️</div><h2>تعذر الاتصال بقاعدة البيانات</h2>
+  <p style="line-height:1.8;color:#555">تأكد من الإنترنت ثم حدّث الصفحة. إذا تكررت، صوّر هذي الرسالة.</p>
+  <p style="color:#999;font-size:12px;direction:ltr">${esc(code)}</p></div></div>`;
 }
 const clientsCol=()=>collection(db,"spaces",user.uid,"clients");
 const clientDoc=id=>doc(db,"spaces",user.uid,"clients",id);
@@ -252,6 +257,7 @@ function createNew(){
   const ref=doc(clientsCol());
   const c={name,brief:"",tasks:[],price:"",start:"",end:"",folderCreated:false,folderPath:"",inExcel:false,created:Date.now()};
   setDoc(ref,c).catch(e=>toast("لم يُحفظ: "+e.message,true));
+  clients.unshift({id:ref.id,...c});
   closeNew();location.hash="#/c/"+ref.id;
 }
 $("#newOk").onclick=createNew;
@@ -346,6 +352,7 @@ async function delClient(){
   if(!confirm(`حذف «${cur.name}»؟\n(لن يُحذف المجلد من الكمبيوتر ولا الصف من الإكسل)`))return;
   const id=cur.id;cur=null;clearTimeout(saveT);saveT=null;
   deleteDoc(clientDoc(id)).catch(e=>toast(e.message,true));
+  clients=clients.filter(c=>c.id!==id);
   location.hash="#/";
 }
 
