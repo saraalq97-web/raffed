@@ -175,10 +175,15 @@ if(String(firebaseConfig.apiKey).startsWith("PASTE")){
   <p style="line-height:1.8;color:#555">لازم تلصق إعدادات مشروع Firebase داخل ملف <b>index.html</b>.</p></div></div>`;
 }else{
   const app=initializeApp(firebaseConfig);
-  db=initializeFirestore(app,{localCache:persistentLocalCache({tabManager:persistentMultipleTabManager()})});
+  db=initializeFirestore(app,{experimentalAutoDetectLongPolling:true,localCache:persistentLocalCache({tabManager:persistentMultipleTabManager()})});
   user={uid:getKey()};
   renderTop();
-  unsub=onSnapshot(clientsCol(),snap=>{
+  let got=false;
+  setTimeout(()=>{if(!got)$("#app").innerHTML=`<div class="login"><div class="sheet"><div class="logo">⏳</div><h2>ما وصلنا لقاعدة البيانات</h2>
+    <p style="line-height:1.8;color:#555">تأكد إنك أنشأت <b>Firestore Database</b> في Firebase (Databases &amp; Storage ← Firestore ← Create database)، وإن القواعد منشورة، وإن الإنترنت شغّال. بعدها حدّث الصفحة.</p></div></div>`;},12000);
+  unsub=onSnapshot(clientsCol(),{includeMetadataChanges:true},snap=>{
+    if(snap.metadata&&snap.metadata.fromCache&&!got&&snap.empty)return;
+    got=true;
     let list=snap.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>(b.created||0)-(a.created||0));
     if(cur){
       const fresh=list.find(c=>c.id===cur.id);
