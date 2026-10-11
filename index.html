@@ -330,15 +330,39 @@ function flush(){if(saveT){clearTimeout(saveT);save();}}
 function mark(fields){Object.assign(cur,fields);setDoc(clientDoc(cur.id),fields,{merge:true}).catch(e=>toast(e.message,true));renderStatus();}
 async function busy(btn,fn){btn.disabled=true;try{await fn();}catch(e){if(e.name!=="AbortError")toast(e.message,true);}btn.disabled=false;}
 
+const FILES=[["dwg","AutoCAD"],["rvt","Revit"],["max","3ds Max"],["skp","SketchUp"],["indd","InDesign"]];
+const TPL_DIR="قوالب";
+async function getTemplates(dir){
+  const t=await dir.getDirectoryHandle(TPL_DIR,{create:true}),found={};
+  for await(const [n,h] of t.entries()){
+    if(h.kind!=="file")continue;
+    const ext=(n.split(".").pop()||"").toLowerCase();
+    if(FILES.some(f=>f[0]===ext)&&!found[ext])found[ext]=h;
+  }
+  return found;
+}
 function makeFolder(){busy($("#mkFolder"),async()=>{
   if(!cur.name.trim())throw new Error("اكتب اسم العميل أولًا");
   const dir=await getDir();flush();
   const name=safeName(cur.name);
-  let existed=true;try{await dir.getDirectoryHandle(name);}catch{existed=false;}
+  const tpl=await getTemplates(dir);
   const root=await dir.getDirectoryHandle(name,{create:true});
-  for(const s of SOFTWARE)await root.getDirectoryHandle(`${name} - ${s}`,{create:true});
+  let made=0,kept=0;const missing=[];
+  for(const [ext,app] of FILES){
+    const fname=`${name}.${ext}`;
+    let exists=true;try{await root.getFileHandle(fname);}catch{exists=false;}
+    if(exists){kept++;continue;}                       // never overwrite real work
+    if(!tpl[ext]){missing.push(app);continue;}
+    const src=await tpl[ext].getFile();
+    const fh=await root.getFileHandle(fname,{create:true});
+    const w=await fh.createWritable();await w.write(src);await w.close();made++;
+  }
   mark({folderCreated:true,folderPath:`${dir.name}\\${name}`});
-  toast(existed?"المجلد موجود مسبقًا — تم التأكد من المجلدات الخمسة":`تم إنشاء المجلد في «${dir.name}» ✓`);
+  if(missing.length===FILES.length&&!kept)
+    toast(`أنشأت مجلد العميل، لكن مجلد «${TPL_DIR}» فاضي — ضع فيه ملف فاضي من كل برنامج (راجع التعليمات)`,true);
+  else if(missing.length)
+    toast(`تم إنشاء ${made} ${made===1?"ملف":"ملفات"} ✓ — ناقص قالب: ${missing.join("، ")} (ضعه في مجلد «${TPL_DIR}»)`,true);
+  else toast(made?`تم إنشاء ملفات العميل (${made}) ✓`:"الملفات موجودة مسبقًا — ما تغيّر شيء");
 });}
 function addExcel(){busy($("#toExcel"),async()=>{
   if(!cur.name.trim())throw new Error("اكتب اسم العميل أولًا");
